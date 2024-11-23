@@ -1,0 +1,80 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <IRremote.h>
+
+#define SCREEN_WIDTH 128    // OLED display width
+#define SCREEN_HEIGHT 32    // OLED display height
+#define OLED_RESET -1      // Reset pin (or -1 if sharing Arduino reset pin)
+#define SCREEN_ADDRESS 0x3C // I2C address for display
+
+#define BUTTON_PIN 2        // Push button pin
+#define IR_LED_PIN 9        // IR LED pin
+#define IR_STATUS_PIN 10    // Status LED pin
+
+// Initialize display
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+int carID = 1;             // Current car ID (1-6)
+int maxCars = 6;
+int signalRepeats = 3;
+int irDelay = 100;
+bool lastButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
+unsigned long debounceDelay = 50;    // Debounce time in milliseconds
+
+void setup() {
+  pinMode(IR_STATUS_PIN, OUTPUT);
+  
+  // Initialize OLED
+  if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    while (1); // Don't proceed if display initialization fails
+  }
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
+  
+  // Initialize button pin with internal pullup
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  
+  // Initialize IR sender
+  IrSender.begin(IR_LED_PIN);
+  
+  updateDisplay();
+}
+
+void loop() {
+  // Read button with debouncing
+  int reading = digitalRead(BUTTON_PIN);
+  
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+  
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (reading == LOW) { // Button pressed
+      carID = (carID % maxCars) + 1;  // Cycle through 1-maxCars
+      updateDisplay();
+      delay(100); // Prevent multiple triggers
+    }
+  }
+  
+  lastButtonState = reading;
+  
+  //digitalWrite(IR_STATUS_PIN, HIGH); 
+
+  // Send IR signal
+  IrSender.sendNEC(0x00, carID, signalRepeats);  // Address 0, command = carID, repeat 3 times
+  delay(irDelay);
+
+  //digitalWrite(IR_STATUS_PIN, LOW);   
+  //delay(2000);
+}
+
+void updateDisplay() {
+  display.clearDisplay();
+  display.setCursor(0,10);
+  display.print("CAR: ");
+  display.println(carID);
+  display.display();
+}
