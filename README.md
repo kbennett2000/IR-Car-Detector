@@ -16,7 +16,9 @@ Schematics and code for RC Car IR Beacons and a Detector. This is very much a wo
 ### IR Beacon
 - [Schematic](/schematics/IR_Beacon.png)
 - [Code](/code/IRBeacon.c)
+![Beacon Schematic](/images/IR_Beacon_README.png)
 
 ### IR Detector
 - [Schematic](/schematics/IR_Detector.png)
 - [Code](/code/IRDetector.py)
+![Detector Schematic](/images/IR_Detector_README.png)
