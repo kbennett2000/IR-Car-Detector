@@ -1,65 +1,135 @@
 import RPi.GPIO as GPIO
-import mysql.connector
+import time
 from datetime import datetime
-from irrcv.nec import NEC_IR
+from flask import Flask, render_template_string, jsonify
+from threading import Thread
 
-maxCars = 6
-
-# GPIO setup for two detectors
+# Configuration
 IR_PIN_1 = 17
 IR_PIN_2 = 18
+MAX_CARS = 8
+
+START_PULSE_MAX = 0.008
+START_PULSE_MIN = 0.003
+PULSE_COUNT_WINDOW = 0.02
+DETECTION_INTERVAL = 0.02
+VALIDATION_READINGS = 2
+
+START_PULSE_MAX_MS = START_PULSE_MAX * 1000
+START_PULSE_MIN_MS = START_PULSE_MIN * 1000
+INTER_PULSE_DELAY = 0.0002
+POST_START_DELAY = 0.001
+LOOP_DELAY = 0.0001
+
 GPIO.setmode(GPIO.BCM)
 GPIO.setup([IR_PIN_1, IR_PIN_2], GPIO.IN)
 
-# MySQL connection
-db = mysql.connector.connect(
-    host="localhost",
-    user="pi_user",
-    password="yourpassword",
-    database="rc_timing"
-)
-cursor = db.cursor()
+# Flask Setup
+app = Flask(__name__)
 
-# Initialize IR decoders
-ir_decoder_1 = NEC_IR(IR_PIN_1)
-ir_decoder_2 = NEC_IR(IR_PIN_2)
-def log_detection(car_id, detector_id):
-    try:
-        cursor.execute(
-            "INSERT INTO lap_times (car_id, detector_id) VALUES (%s, %s)", 
-            (car_id, detector_id)
-        )
-        db.commit()
-        print(f"Car {car_id} detected on sensor {detector_id}")
-    except mysql.connector.Error as err:
-        print(f"Database error: {err}")
-        db.rollback()
+# Global variable to store current car detection details
+current_car = {'id': None, 'time': None}
+
+def decode_pulses(pin):
+    if GPIO.input(pin):
+        return None
+        
+    start = time.time()
+    while not GPIO.input(pin) and (time.time() - start < START_PULSE_MAX):
+        pass
+    
+    pulse_len = (time.time() - start) * 1000
+    if not (START_PULSE_MIN_MS <= pulse_len <= START_PULSE_MAX_MS):
+        return None
+        
+    time.sleep(POST_START_DELAY)
+    
+    pulses = 0
+    pulse_start = time.time()
+    while time.time() - pulse_start < PULSE_COUNT_WINDOW:
+        if not GPIO.input(pin):
+            pulses += 1
+            while not GPIO.input(pin) and (time.time() - pulse_start < PULSE_COUNT_WINDOW):
+                pass
+            time.sleep(INTER_PULSE_DELAY)
+    
+    return pulses if 1 <= pulses <= MAX_CARS else None
+
+def validate_car_id(detector_id, car_id):
+    global recent_readings
+    if detector_id not in recent_readings:
+        recent_readings[detector_id] = []
+        
+    readings = recent_readings[detector_id]
+    readings.append(car_id)
+    if len(readings) > VALIDATION_READINGS:
+        readings.pop(0)
+        
+    if len(readings) == VALIDATION_READINGS and readings.count(car_id) >= (VALIDATION_READINGS - 1):
+        return car_id
+    return None
+
+# Route to display the current car detection
+@app.route('/')
+def home():
+    return render_template_string("""
+        <h1>Car Detector</h1>
+        <h2>Car ID: <span id="car-id">Loading...</span></h2>
+        <p>Detected at: <span id="detection-time">Loading...</span></p>
+        <script>
+            function updateCarData() {
+                fetch('/current_car')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('car-id').textContent = data.id || 'None';
+                    document.getElementById('detection-time').textContent = data.time || 'None';
+                })
+                .catch(err => console.error('Error fetching car data:', err));
+            }
+            
+            setInterval(updateCarData, 1000);  // Update every 1 second
+            updateCarData();  // Initial call to load data immediately
+        </script>
+    """)
+
+# Route to fetch current car data in JSON format
+@app.route('/current_car')
+def current_car_data():
+    return jsonify(current_car)
+
+def update_car_detection(validated_id):
+    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    current_car['id'] = validated_id
+    current_car['time'] = current_time
+
+# Run Flask in a separate thread
+def run_flask():
+    app.run(host='0.0.0.0', port=5000, threaded=True)
+
+flask_thread = Thread(target=run_flask)
+flask_thread.start()
+
 try:
-    print("Starting IR detection...")
+    print("IR Car Detector - High Speed Version")
+    print("Press Ctrl+C to exit")
+    
+    last_detection = {1: 0, 2: 0}
+    recent_readings = {}
+    
     while True:
-        if ir_decoder_1.decode():
-            car_id = ir_decoder_1.command
-            if 1 <= car_id <= maxCars:
-                log_detection(car_id, 1)
+        for detector_id, pin in [(1, IR_PIN_1), (2, IR_PIN_2)]:
+            car_id = decode_pulses(pin)
+            if car_id:
+                validated_id = validate_car_id(detector_id, car_id)
+                if validated_id:
+                    current_time = time.time()
+                    if current_time - last_detection[detector_id] > DETECTION_INTERVAL:
+                        print(f"Car {validated_id} detected on sensor {detector_id} at {current_time}")
+                        last_detection[detector_id] = current_time
+                        update_car_detection(validated_id)
+        
+        time.sleep(LOOP_DELAY)
 
-        if ir_decoder_2.decode():
-            car_id = ir_decoder_2.command
-            if 1 <= car_id <= maxCars:
-                log_detection(car_id, 2)
-
-        # The time.sleep(0.01) adds a 10-millisecond delay to prevent the CPU from running at 100% utilization. Without this delay:
-        # - The while loop would run as fast as possible
-        # - CPU usage would be unnecessarily high
-        # - Could potentially make the system less responsive
-        # The 10ms delay is a balance between:
-        # - Being responsive enough to not miss IR signals (NEC protocol takes ~67ms to transmit)
-        # - Keeping CPU usage reasonable
-        # - Allowing other system processes to run
-        # You could adjust this value based on your needs:
-        # - Decrease for faster response time
-        # - Increase to reduce CPU usage
-        # - Remove entirely if you need absolute minimum latency
-        time.sleep(0.01)
 except KeyboardInterrupt:
+    print("\nStopping...")
     GPIO.cleanup()
-    db.close()
