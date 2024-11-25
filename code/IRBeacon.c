@@ -5,7 +5,7 @@
 
 #define SCREEN_WIDTH 128    // OLED display width
 #define SCREEN_HEIGHT 32    // OLED display height
-#define OLED_RESET -1      // Reset pin (or -1 if sharing Arduino reset pin)
+#define OLED_RESET -1       // Reset pin (or -1 if sharing Arduino reset pin)
 #define SCREEN_ADDRESS 0x3C // I2C address for display
 
 #define BUTTON_PIN 2        // Push button pin
